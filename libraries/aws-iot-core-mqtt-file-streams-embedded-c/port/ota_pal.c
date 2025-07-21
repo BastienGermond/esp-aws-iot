@@ -34,7 +34,10 @@
 #include "hal/wdt_hal.h"
 #include "esp_partition.h"
 
-#if !CONFIG_IDF_TARGET_ESP32C6 && !CONFIG_IDF_TARGET_ESP32H2 
+#if !CONFIG_IDF_TARGET_ESP32C61 && !CONFIG_IDF_TARGET_ESP32H2 &&               \
+    !CONFIG_IDF_TARGET_ESP32P4 && !CONFIG_IDF_TARGET_ESP32C5 &&                \
+    !CONFIG_IDF_TARGET_ESP32H21 && !CONFIG_IDF_TARGET_ESP32C6 &&               \
+    !CONFIG_IDF_TARGET_ESP32H4
 #include "soc/rtc_cntl_reg.h"
 #else
 #include "soc/lp_wdt_reg.h"
