@@ -1,5 +1,6 @@
 # This gives OTA_INCLUDE_PUBLIC_DIRS, and OTA_SOURCES
 include(${CMAKE_CURRENT_LIST_DIR}/aws-iot-core-mqtt-file-streams-embedded-c/mqttFileDownloaderFilePaths.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/../common/crypto/cryptoFilePaths.cmake)
 
 set(AWS_OTA_PORT_INCLUDE_DIRS
     ${CMAKE_CURRENT_LIST_DIR}/port
@@ -16,6 +17,7 @@ set(AWS_OTA_PORT_SRCS
     ${CMAKE_CURRENT_LIST_DIR}/port/aws_esp_ota_ops.c
     ${CMAKE_CURRENT_LIST_DIR}/port/ota_pal.c
     ${CMAKE_CURRENT_LIST_DIR}/port/ota_os_freertos.c
+    ${AWS_IOT_CRYPTO_SHARED_SRCS}
 )
 
 set(AWS_OTA_SRCS
@@ -38,13 +40,18 @@ set(AWS_OTA_REQUIRES
     cbor
 )
 
+set(AWS_OTA_PRIV_INCLUDE_DIRS
+    ${OTA_INCLUDE_PRIVATE_DIRS}
+    ${AWS_IOT_CRYPTO_SHARED_INCLUDE_DIRS}
+)
+
 idf_component_register(
     SRCS
         ${AWS_OTA_SRCS}
     INCLUDE_DIRS
         ${AWS_OTA_INCLUDE_DIRS}
     PRIV_INCLUDE_DIRS
-        ${OTA_INCLUDE_PRIVATE_DIRS}
+        ${AWS_OTA_PRIV_INCLUDE_DIRS}
     REQUIRES
         ${AWS_OTA_REQUIRES}
 )

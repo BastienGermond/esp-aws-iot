@@ -1,5 +1,6 @@
 # This gives PKCS_INCLUDE_PUBLIC_DIRS, and PKCS_SOURCES
 include(${CMAKE_CURRENT_LIST_DIR}/corePKCS11/pkcsFilePaths.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/../common/crypto/cryptoFilePaths.cmake)
 
 set(COREPKCS11_LOCATION "${CMAKE_CURRENT_LIST_DIR}/corePKCS11")
 
@@ -18,7 +19,7 @@ set(COREPKCS_INCLUDE_DIRS
 
 set(COREPKCS_PORT_SRCS
     ${CMAKE_CURRENT_LIST_DIR}/port/core_pkcs11_pal.c
-    ${CMAKE_CURRENT_LIST_DIR}/port/iot_crypto.c
+    ${AWS_IOT_CRYPTO_SHARED_SRCS}
 )
 
 set(COREPKCS_SRCS
@@ -42,7 +43,7 @@ idf_component_register(
         ${COREPKCS_INCLUDE_DIRS}
         ${CORE_PKCS11_3RDPARTY_LOCATION}/mbedtls_utils
     PRIV_INCLUDE_DIRS
-        
+        ${AWS_IOT_CRYPTO_SHARED_INCLUDE_DIRS}
     REQUIRES
         ${COREPKCS_REQUIRES}
 )
