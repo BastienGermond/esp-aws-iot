@@ -28,7 +28,6 @@ set(AWS_OTA_SRCS
 set(AWS_OTA_REQUIRES
     esp_rom
     mbedtls
-    corePKCS11
     coreJSON
     esp_common
     spi_flash
@@ -40,10 +39,15 @@ set(AWS_OTA_REQUIRES
     cbor
 )
 
+set(AWS_OTA_PRIV_REQUIRES)
 set(AWS_OTA_PRIV_INCLUDE_DIRS
     ${OTA_INCLUDE_PRIVATE_DIRS}
     ${AWS_IOT_CRYPTO_SHARED_INCLUDE_DIRS}
 )
+
+if(IDF_VERSION_MAJOR GREATER_EQUAL 6)
+    list(APPEND AWS_OTA_PRIV_REQUIRES esp_hal_wdt)
+endif()
 
 idf_component_register(
     SRCS
@@ -52,6 +56,8 @@ idf_component_register(
         ${AWS_OTA_INCLUDE_DIRS}
     PRIV_INCLUDE_DIRS
         ${AWS_OTA_PRIV_INCLUDE_DIRS}
+    PRIV_REQUIRES
+        ${AWS_OTA_PRIV_REQUIRES}
     REQUIRES
         ${AWS_OTA_REQUIRES}
 )
