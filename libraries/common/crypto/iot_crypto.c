@@ -35,11 +35,17 @@
     #include MBEDTLS_CONFIG_FILE
 #endif
 
+#include "mbedtls/version.h"
 #include "mbedtls/platform.h"
-#include "mbedtls/sha256.h"
-#include "mbedtls/sha1.h"
 #include "mbedtls/pk.h"
 #include "mbedtls/x509_crt.h"
+
+#if ( MBEDTLS_VERSION_NUMBER >= 0x04000000 )
+    #include "mbedtls/md.h"
+#else
+    #include "mbedtls/sha256.h"
+    #include "mbedtls/sha1.h"
+#endif
 
 /* Threading mutex implementations for mbedTLS. */
 #include "mbedtls/threading.h"
@@ -52,7 +58,8 @@
 
 /* Compatibility for mbedTLS v2.x and 3.0 upwards */
 
-#if (MBEDTLS_VERSION_NUMBER >= 0x03000000)
+#if ( MBEDTLS_VERSION_NUMBER >= 0x03000000 ) && \
+    ( MBEDTLS_VERSION_NUMBER < 0x04000000 )
     #define mbedtls_sha1_starts_ret       mbedtls_sha1_starts
     #define mbedtls_sha1_finish_ret       mbedtls_sha1_finish
     #define mbedtls_sha1_update_ret       mbedtls_sha1_update
@@ -68,8 +75,12 @@ typedef struct SignatureVerificationState
 {
     BaseType_t xAsymmetricAlgorithm;
     BaseType_t xHashAlgorithm;
+#if ( MBEDTLS_VERSION_NUMBER >= 0x04000000 )
+    mbedtls_md_context_t xHashContext;
+#else
     mbedtls_sha1_context xSHA1Context;
     mbedtls_sha256_context xSHA256Context;
+#endif
 } SignatureVerificationState_t, * SignatureVerificationStatePtr_t;
 
 /*-----------------------------------------------------------*/
@@ -99,6 +110,52 @@ typedef struct SignatureVerificationState
 /*-----------------------------------------------------------*/
 
 /**
+ * @brief Maps a portable hash-algorithm identifier to the mbedTLS equivalent.
+ */
+static BaseType_t prvGetMbedtlsHashAlgorithm( BaseType_t xHashAlgorithm,
+                                              mbedtls_md_type_t * pxMbedHashAlg )
+{
+    BaseType_t xResult = pdTRUE;
+
+    if( pxMbedHashAlg == NULL )
+    {
+        xResult = pdFALSE;
+    }
+    else if( cryptoHASH_ALGORITHM_SHA1 == xHashAlgorithm )
+    {
+        *pxMbedHashAlg = MBEDTLS_MD_SHA1;
+    }
+    else if( cryptoHASH_ALGORITHM_SHA256 == xHashAlgorithm )
+    {
+        *pxMbedHashAlg = MBEDTLS_MD_SHA256;
+    }
+    else
+    {
+        xResult = pdFALSE;
+    }
+
+    return xResult;
+}
+
+/*-----------------------------------------------------------*/
+
+/**
+ * @brief Releases a signature-verification context.
+ */
+static void prvSignatureVerificationContextFree( SignatureVerificationState_t * pxCtx )
+{
+    if( pxCtx != NULL )
+    {
+#if ( MBEDTLS_VERSION_NUMBER >= 0x04000000 )
+        mbedtls_md_free( &pxCtx->xHashContext );
+#endif
+        vPortFree( pxCtx );
+    }
+}
+
+/*-----------------------------------------------------------*/
+
+/**
  * @brief Verifies a cryptographic signature based on the signer
  * certificate, hash algorithm, and the data that was signed.
  */
@@ -112,7 +169,7 @@ static BaseType_t prvVerifySignature( char * pcSignerCertificate,
 {
     BaseType_t xResult = pdTRUE;
     mbedtls_x509_crt xCertCtx;
-    mbedtls_md_type_t xMbedHashAlg = MBEDTLS_MD_SHA256;
+    mbedtls_md_type_t xMbedHashAlg = MBEDTLS_MD_NONE;
 
 
     memset( &xCertCtx, 0, sizeof( mbedtls_x509_crt ) );
@@ -120,9 +177,9 @@ static BaseType_t prvVerifySignature( char * pcSignerCertificate,
     /*
      * Map the hash algorithm
      */
-    if( cryptoHASH_ALGORITHM_SHA1 == xHashAlgorithm )
+    if( prvGetMbedtlsHashAlgorithm( xHashAlgorithm, &xMbedHashAlg ) != pdTRUE )
     {
-        xMbedHashAlg = MBEDTLS_MD_SHA1;
+        return pdFALSE;
     }
 
     /*
@@ -200,6 +257,7 @@ BaseType_t CRYPTO_SignatureVerificationStart( void ** ppvContext,
 
     if( pdTRUE == xResult )
     {
+        memset( pxCtx, 0, sizeof( *pxCtx ) );
         *ppvContext = pxCtx;
 
         /*
@@ -211,16 +269,57 @@ BaseType_t CRYPTO_SignatureVerificationStart( void ** ppvContext,
         /*
          * Initialize the requested hash type
          */
+#if ( MBEDTLS_VERSION_NUMBER >= 0x04000000 )
+        {
+            mbedtls_md_type_t xMbedHashAlg = MBEDTLS_MD_NONE;
+            const mbedtls_md_info_t * pxHashInfo = NULL;
+
+            mbedtls_md_init( &pxCtx->xHashContext );
+
+            if( prvGetMbedtlsHashAlgorithm( pxCtx->xHashAlgorithm, &xMbedHashAlg ) != pdTRUE )
+            {
+                xResult = pdFALSE;
+            }
+
+            if( pdTRUE == xResult )
+            {
+                pxHashInfo = mbedtls_md_info_from_type( xMbedHashAlg );
+
+                if( ( pxHashInfo == NULL ) ||
+                    ( mbedtls_md_setup( &pxCtx->xHashContext, pxHashInfo, 0 ) != 0 ) ||
+                    ( mbedtls_md_starts( &pxCtx->xHashContext ) != 0 ) )
+                {
+                    xResult = pdFALSE;
+                }
+            }
+        }
+#else
         if( cryptoHASH_ALGORITHM_SHA1 == pxCtx->xHashAlgorithm )
         {
             mbedtls_sha1_init( &pxCtx->xSHA1Context );
             ( void ) mbedtls_sha1_starts_ret( &pxCtx->xSHA1Context );
         }
-        else
+
+        else if( cryptoHASH_ALGORITHM_SHA256 == pxCtx->xHashAlgorithm )
         {
             mbedtls_sha256_init( &pxCtx->xSHA256Context );
             ( void ) mbedtls_sha256_starts_ret( &pxCtx->xSHA256Context, 0 );
         }
+        else
+        {
+            xResult = pdFALSE;
+        }
+#endif
+    }
+
+    if( pdTRUE != xResult )
+    {
+        if( ppvContext != NULL )
+        {
+            *ppvContext = NULL;
+        }
+
+        prvSignatureVerificationContextFree( pxCtx );
     }
 
     return xResult;
@@ -239,6 +338,9 @@ void CRYPTO_SignatureVerificationUpdate( void * pvContext,
     /*
      * Add the data to the hash of the requested type
      */
+#if ( MBEDTLS_VERSION_NUMBER >= 0x04000000 )
+    ( void ) mbedtls_md_update( &pxCtx->xHashContext, pucData, xDataLength );
+#else
     if( cryptoHASH_ALGORITHM_SHA1 == pxCtx->xHashAlgorithm )
     {
         ( void ) mbedtls_sha1_update_ret( &pxCtx->xSHA1Context, pucData, xDataLength );
@@ -247,6 +349,12 @@ void CRYPTO_SignatureVerificationUpdate( void * pvContext,
     {
         ( void ) mbedtls_sha256_update_ret( &pxCtx->xSHA256Context, pucData, xDataLength );
     }
+#endif
+}
+
+void CRYPTO_SignatureVerificationCleanup( void * pvContext )
+{
+    prvSignatureVerificationContextFree( ( SignatureVerificationStatePtr_t ) pvContext ); /*lint !e9087 Allow casting void* to other types. */
 }
 
 /**
@@ -275,39 +383,50 @@ BaseType_t CRYPTO_SignatureVerificationFinal( void * pvContext,
             /*
              * Finish the hash
              */
+#if ( MBEDTLS_VERSION_NUMBER >= 0x04000000 )
+            if( mbedtls_md_finish( &pxCtx->xHashContext, ucSHA1or256 ) == 0 )
+            {
+                pucHash = ucSHA1or256;
+                xHashLength = ( cryptoHASH_ALGORITHM_SHA1 == pxCtx->xHashAlgorithm ) ?
+                              cryptoSHA1_DIGEST_BYTES :
+                              cryptoSHA256_DIGEST_BYTES;
+            }
+#else
             if( cryptoHASH_ALGORITHM_SHA1 == pxCtx->xHashAlgorithm )
             {
                 ( void ) mbedtls_sha1_finish_ret( &pxCtx->xSHA1Context, ucSHA1or256 );
                 pucHash = ucSHA1or256;
                 xHashLength = cryptoSHA1_DIGEST_BYTES;
             }
+
             else
             {
                 ( void ) mbedtls_sha256_finish_ret( &pxCtx->xSHA256Context, ucSHA1or256 );
                 pucHash = ucSHA1or256;
                 xHashLength = cryptoSHA256_DIGEST_BYTES;
             }
+#endif
 
             /*
              * Verify the signature
              */
-            xResult = prvVerifySignature( pcSignerCertificate,
-                                          xSignerCertificateLength,
-                                          pxCtx->xHashAlgorithm,
-                                          pucHash,
-                                          xHashLength,
-                                          pucSignature,
-                                          xSignatureLength );
+            if( pucHash != NULL )
+            {
+                xResult = prvVerifySignature( pcSignerCertificate,
+                                              xSignerCertificateLength,
+                                              pxCtx->xHashAlgorithm,
+                                              pucHash,
+                                              xHashLength,
+                                              pucSignature,
+                                              xSignatureLength );
+            }
         }
         else
         {
             /* Allow function to be called with only the context pointer for cleanup after a failure. */
         }
 
-        /*
-         * Clean-up
-         */
-        vPortFree( pxCtx );
+        CRYPTO_SignatureVerificationCleanup( pxCtx );
     }
 
     return xResult;

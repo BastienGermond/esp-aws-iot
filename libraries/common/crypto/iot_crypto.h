@@ -86,6 +86,14 @@ void CRYPTO_SignatureVerificationUpdate( void * pvContext,
                                          size_t xDataLength );
 
 /**
+ * @brief Releases a signature-verification context without performing
+ * verification.
+ *
+ * @param[in] pvContext Opaque context structure.
+ */
+void CRYPTO_SignatureVerificationCleanup( void * pvContext );
+
+/**
  * @brief Verifies a digital signature computation using the public key from the
  * specified certificate.
  *
@@ -103,7 +111,9 @@ BaseType_t CRYPTO_SignatureVerificationFinal( void * pvContext,
                                               size_t xSignerCertificateLength,
                                               const uint8_t * pucSignature,
                                               size_t xSignatureLength );
+
 #ifdef __cplusplus
 }
 #endif /* __cplusplus */
+
 #endif /* ifndef __AWS_CRYPTO__H__ */
