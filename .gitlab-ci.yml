@@ -1,86 +1,149 @@
 stages:
   - build
 
+# -----------------------------------------------------------------------------
+# CI pipeline for esp-aws-iot
+#
+# Compiles every example application against every supported ESP-IDF release
+# on every supported chip target. Each job runs inside the matching official
+# `espressif/idf:release-vX.X` Docker image, so no runner-side IDF setup is
+# required.
+#
+# Supported IDF versions and targets are derived from the top-level README.md.
+# -----------------------------------------------------------------------------
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
 variables:
-  V: "0"
-  MAKEFLAGS: "-j8 --no-keep-going"
+  GIT_STRATEGY: clone
   GIT_SUBMODULE_STRATEGY: recursive
+  GIT_DEPTH: "1"
+  IDF_CCACHE_ENABLE: "1"
+  # Pedantic build flags matching upstream esp-aws-iot CI conventions.
+  PEDANTIC_FLAGS: "-Werror=deprecated-declarations -Wno-error=cpp"
 
-before_script:
-   # add gitlab ssh key
-    - mkdir -p ~/.ssh
-    - chmod 700 ~/.ssh
-    - echo -n $GITLAB_KEY > ~/.ssh/id_rsa_base64
-    - base64 --decode --ignore-garbage ~/.ssh/id_rsa_base64 > ~/.ssh/id_rsa
-    - chmod 600 ~/.ssh/id_rsa
-    - echo -e "Host gitlab.espressif.cn\n\tStrictHostKeyChecking no\n" >> ~/.ssh/config
-    # Create esp-rainmaker-bins-${CI_JOB_ID}/ dir (to copy binaries into for artifacts)
-    - mkdir -p $CI_PROJECT_DIR/esp-rainmaker-bins-${CI_JOB_ID}
-
-.build_all_examples: &build_all_examples
-# - pip install --upgrade idf-component-manager
-- for EXAMPLE in $EXAMPLES; do
-- cd $CI_PROJECT_DIR/examples/$EXAMPLE
-- echo Building $EXAMPLE
-- for TARGET in $EXAMPLE_TARGETS; do
-- echo Building for $TARGET
-- if [ "$TARGET" = "esp32c5" ]; then
--   echo "ESP32-C5 detected, adding --preview flag."
--   PREVIEW_FLAG="--preview"
-- fi
-- idf.py $PREVIEW_FLAG set-target $TARGET
-- idf.py build
-- done
-- echo Build Complete for $EXAMPLE
-- done
-
+# -----------------------------------------------------------------------------
+# Reusable build template.
+#
+# Variables expected from the matrix:
+#   IDF_VERSION : ESP-IDF release tag (e.g. v5.5)
+#   EXAMPLE     : Path to the example project relative to the repo root
+#   IDF_TARGET  : Chip target (e.g. esp32, esp32s3, esp32c6, esp32c5)
+# -----------------------------------------------------------------------------
 .build_template:
   stage: build
-  image: espressif/idf:latest
+  image: espressif/idf:release-${IDF_VERSION}
   tags:
     - build
+    - internet
   variables:
-    PEDANTIC_FLAGS: "-Werror=deprecated-declarations -Wno-error=cpp"
     EXTRA_CFLAGS: "${PEDANTIC_FLAGS}"
     EXTRA_CXXFLAGS: "${PEDANTIC_FLAGS}"
-    EXAMPLE_TARGETS: "esp32"
-    EXAMPLES: "mqtt/tls_mutual_auth http/http_mutual_auth jobs thing_shadow fleet_provisioning/fleet_provisioning_with_csr"
+  before_script:
+    - export IDF_PATH="/opt/esp/idf"
+    - . ${IDF_PATH}/export.sh
+    - idf.py --version
   script:
-    - *build_all_examples
+    - echo "Building ${EXAMPLE} for ${IDF_TARGET} on IDF ${IDF_VERSION}"
+    - idf.py -C "${EXAMPLE}" -DIDF_TARGET="${IDF_TARGET}" build
+  artifacts:
+    when: on_failure
+    paths:
+      - "${EXAMPLE}/build/log/"
+    expire_in: 1 week
 
-build_idf_v5.1:
-  extends: .build_template
-  image: espressif/idf:release-v5.1
-  variables:
-    EXAMPLE_TARGETS: "esp32 esp32c3 esp32s2 esp32s3 esp32c2 esp32c6"
+# -----------------------------------------------------------------------------
+# Shared matrix axes for IDF v5.2 .. v5.4. v5.5 and v6.0 have their own
+# matrices below because of differing target/example support.
+# -----------------------------------------------------------------------------
+.common_examples: &common_examples
+  EXAMPLE:
+    - examples/mqtt/tls_mutual_auth
+    - examples/http/http_mutual_auth
+    - examples/thing_shadow
+    - examples/jobs
+    - examples/fleet_provisioning/fleet_provisioning_with_csr
 
-build_idf_v5.2:
-  extends: .build_template
-  image: espressif/idf:release-v5.2
-  variables:
-    EXAMPLE_TARGETS: "esp32 esp32c3 esp32s2 esp32s3 esp32c2 esp32c6"
+.common_targets: &common_targets
+  IDF_TARGET:
+    - esp32
+    - esp32s2
+    - esp32s3
+    - esp32c2
+    - esp32c3
+    - esp32c6
 
-build_idf_v5.3:
+build:idf-v5.2:
   extends: .build_template
-  image: espressif/idf:release-v5.3
   variables:
-    EXAMPLE_TARGETS: "esp32 esp32c3 esp32s2 esp32s3 esp32c2 esp32c6"
+    IDF_VERSION: "v5.2"
+  parallel:
+    matrix:
+      - <<: *common_examples
+        <<: *common_targets
 
-build_idf_v5.4:
+build:idf-v5.3:
   extends: .build_template
-  image: espressif/idf:release-v5.4
   variables:
-    EXAMPLE_TARGETS: "esp32 esp32c3 esp32s2 esp32s3 esp32c2 esp32c6"
+    IDF_VERSION: "v5.3"
+  parallel:
+    matrix:
+      - <<: *common_examples
+        <<: *common_targets
 
-build_idf_v5.5:
+build:idf-v5.4:
   extends: .build_template
-  image: espressif/idf:release-v5.5
   variables:
-    EXAMPLE_TARGETS: "esp32 esp32c3 esp32s2 esp32s3 esp32c2 esp32c6 esp32c5"
+    IDF_VERSION: "v5.4"
+  parallel:
+    matrix:
+      - <<: *common_examples
+        <<: *common_targets
 
-build_idf_v6.0:
+# IDF v5.5 additionally supports esp32c5 (preview).
+build:idf-v5.5:
   extends: .build_template
-  image: espressif/idf:release-v6.0
   variables:
-    EXAMPLE_TARGETS: "esp32 esp32c3 esp32s2 esp32s3 esp32c2 esp32c6 esp32c5"
-    EXAMPLES: "mqtt/tls_mutual_auth http/http_mutual_auth jobs thing_shadow"
+    IDF_VERSION: "v5.5"
+  parallel:
+    matrix:
+      - EXAMPLE:
+          - examples/mqtt/tls_mutual_auth
+          - examples/http/http_mutual_auth
+          - examples/thing_shadow
+          - examples/jobs
+          - examples/fleet_provisioning/fleet_provisioning_with_csr
+        IDF_TARGET:
+          - esp32
+          - esp32s2
+          - esp32s3
+          - esp32c2
+          - esp32c3
+          - esp32c5
+          - esp32c6
+
+# IDF v6.0 supports esp32c5 but does not yet include the fleet_provisioning
+# example (pending upstream compatibility).
+build:idf-v6.0:
+  extends: .build_template
+  variables:
+    IDF_VERSION: "v6.0"
+  parallel:
+    matrix:
+      - EXAMPLE:
+          - examples/mqtt/tls_mutual_auth
+          - examples/http/http_mutual_auth
+          - examples/thing_shadow
+          - examples/jobs
+        IDF_TARGET:
+          - esp32
+          - esp32s2
+          - esp32s3
+          - esp32c2
+          - esp32c3
+          - esp32c5
+          - esp32c6
