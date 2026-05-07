@@ -36,7 +36,7 @@ set(AWS_OTA_REQUIRES
     efuse
     log
     app_update
-    cbor
+    espressif__cbor
 )
 
 set(AWS_OTA_PRIV_REQUIRES)
