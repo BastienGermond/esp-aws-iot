@@ -29,7 +29,6 @@
 #include "ota_config.h"
 
 #include "iot_crypto.h"
-#include "core_pkcs11.h"
 #include "esp_system.h"
 #include "esp_log.h"
 #include "hal/wdt_hal.h"
@@ -52,8 +51,8 @@
 #include "esp_image_format.h"
 #include "esp_ota_ops.h"
 #include "aws_esp_ota_ops.h"
-#include "mbedtls/asn1.h"
 #include "mbedtls/bignum.h"
+#include "mbedtls/asn1.h"
 #include "mbedtls/base64.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -97,14 +96,6 @@ static char * codeSigningCertificatePEM = NULL;
 
 /* Specify the OTA signature algorithm we support on this platform. */
 const char OTA_JsonFileSignatureKey[ OTA_FILE_SIG_KEY_STR_MAX_LENGTH ] = "sig-sha256-ecdsa";
-
-static CK_RV prvGetCertificateHandle( CK_FUNCTION_LIST_PTR pxFunctionList,
-                                      CK_SESSION_HANDLE xSession,
-                                      const char * pcLabelName,
-                                      CK_OBJECT_HANDLE_PTR pxCertHandle );
-static CK_RV prvGetCertificate( const char * pcLabelName,
-                                uint8_t ** ppucData,
-                                uint32_t * pulDataSize );
 
 static OtaPalStatus_t asn1_to_raw_ecdsa( const uint8_t * signature,
                                          uint16_t sig_len,
@@ -254,167 +245,6 @@ OtaPalStatus_t otaPal_CreateFileForRx( AfrOtaJobDocumentFields_t * const pFileCo
 }
 
 
-static CK_RV prvGetCertificateHandle( CK_FUNCTION_LIST_PTR pxFunctionList,
-                                      CK_SESSION_HANDLE xSession,
-                                      const char * pcLabelName,
-                                      CK_OBJECT_HANDLE_PTR pxCertHandle )
-{
-    CK_ATTRIBUTE xTemplate;
-    CK_RV xResult = CKR_OK;
-    CK_ULONG ulCount = 0;
-    CK_BBOOL xFindInit = CK_FALSE;
-
-    /* Get the certificate handle. */
-    if( 0 == xResult )
-    {
-        xTemplate.type = CKA_LABEL;
-        xTemplate.ulValueLen = strlen( pcLabelName ) + 1;
-        xTemplate.pValue = ( char * ) pcLabelName;
-        xResult = pxFunctionList->C_FindObjectsInit( xSession, &xTemplate, 1 );
-    }
-
-    if( 0 == xResult )
-    {
-        xFindInit = CK_TRUE;
-        xResult = pxFunctionList->C_FindObjects( xSession,
-                                                 ( CK_OBJECT_HANDLE_PTR ) pxCertHandle,
-                                                 1,
-                                                 &ulCount );
-    }
-
-    if( CK_TRUE == xFindInit )
-    {
-        xResult = pxFunctionList->C_FindObjectsFinal( xSession );
-    }
-
-    return xResult;
-}
-
-/* Note that this function mallocs a buffer for the certificate to reside in,
- * and it is the responsibility of the caller to free the buffer. */
-static CK_RV prvGetCertificate( const char * pcLabelName,
-                                uint8_t ** ppucData,
-                                uint32_t * pulDataSize )
-{
-    /* Find the certificate */
-    CK_OBJECT_HANDLE xHandle = 0;
-    CK_RV xResult;
-    CK_FUNCTION_LIST_PTR xFunctionList;
-    CK_SLOT_ID xSlotId;
-    CK_ULONG xCount = 1;
-    CK_SESSION_HANDLE xSession;
-    CK_ATTRIBUTE xTemplate = { 0 };
-    uint8_t * pucCert = NULL;
-    CK_BBOOL xSessionOpen = CK_FALSE;
-
-    xResult = C_GetFunctionList( &xFunctionList );
-
-    if( CKR_OK == xResult )
-    {
-        xResult = xFunctionList->C_Initialize( NULL );
-    }
-
-    if( ( CKR_OK == xResult ) || ( CKR_CRYPTOKI_ALREADY_INITIALIZED == xResult ) )
-    {
-        xResult = xFunctionList->C_GetSlotList( CK_TRUE, &xSlotId, &xCount );
-    }
-
-    if( CKR_OK == xResult )
-    {
-        xResult = xFunctionList->C_OpenSession( xSlotId, CKF_SERIAL_SESSION, NULL, NULL, &xSession );
-    }
-
-    if( CKR_OK == xResult )
-    {
-        xSessionOpen = CK_TRUE;
-        xResult = prvGetCertificateHandle( xFunctionList, xSession, pcLabelName, &xHandle );
-    }
-
-    if( ( xHandle != 0 ) && ( xResult == CKR_OK ) ) /* 0 is an invalid handle */
-    {
-        /* Get the length of the certificate */
-        xTemplate.type = CKA_VALUE;
-        xTemplate.pValue = NULL;
-        xResult = xFunctionList->C_GetAttributeValue( xSession, xHandle, &xTemplate, xCount );
-
-        if( xResult == CKR_OK )
-        {
-            pucCert = pvPortMalloc( xTemplate.ulValueLen );
-        }
-
-        if( ( xResult == CKR_OK ) && ( pucCert == NULL ) )
-        {
-            xResult = CKR_HOST_MEMORY;
-        }
-
-        if( xResult == CKR_OK )
-        {
-            xTemplate.pValue = pucCert;
-            xResult = xFunctionList->C_GetAttributeValue( xSession, xHandle, &xTemplate, xCount );
-
-            if( xResult == CKR_OK )
-            {
-                *ppucData = pucCert;
-                *pulDataSize = xTemplate.ulValueLen;
-            }
-            else
-            {
-                vPortFree( pucCert );
-            }
-        }
-    }
-    else /* Certificate was not found. */
-    {
-        *ppucData = NULL;
-        *pulDataSize = 0;
-    }
-
-    if( xSessionOpen == CK_TRUE )
-    {
-        ( void ) xFunctionList->C_CloseSession( xSession );
-    }
-
-    return xResult;
-}
-
-uint8_t * otaPal_ReadAndAssumeCertificate( const uint8_t * const pucCertName,
-                                           uint32_t * const ulSignerCertSize )
-{
-    uint8_t * pucCertData;
-    uint32_t ulCertSize;
-    uint8_t * pucSignerCert = NULL;
-    CK_RV xResult;
-
-    xResult = prvGetCertificate( ( const char * ) pucCertName, &pucSignerCert, ulSignerCertSize );
-
-    if( ( xResult == CKR_OK ) && ( pucSignerCert != NULL ) )
-    {
-        LogInfo( ( "Using cert with label: %s OK", ( const char * ) pucCertName ) );
-    }
-    else
-    {
-        LogInfo( ( "No such certificate file: %s. Using certificate in ota_config.h.",
-                   ( const char * ) pucCertName ) );
-
-        /* Allocate memory for the signer certificate plus a terminating zero so we can copy it and return to the caller. */
-        ulCertSize = strlen( codeSigningCertificatePEM ) + 1;
-        pucSignerCert = pvPortMalloc( ulCertSize );            /*lint !e9029 !e9079 !e838 malloc proto requires void*. */
-        pucCertData = ( uint8_t * ) codeSigningCertificatePEM; /*lint !e9005 we don't modify the cert but it could be set by PKCS11 so it's not const. */
-
-        if( pucSignerCert != NULL )
-        {
-            memcpy( pucSignerCert, pucCertData, ulCertSize );
-            *ulSignerCertSize = ulCertSize;
-        }
-        else
-        {
-            LogError( ( "No memory for certificate in otaPal_ReadAndAssumeCertificate!" ) );
-        }
-    }
-
-    return pucSignerCert;
-}
-
 /* Verify the signature of the specified file. */
 OtaPalStatus_t otaPal_CheckFileSignature( AfrOtaJobDocumentFields_t * const pFileContext )
 {
@@ -438,7 +268,7 @@ OtaPalStatus_t otaPal_CheckFileSignature( AfrOtaJobDocumentFields_t * const pFil
     if( pucSignerCert == NULL )
     {
         LogError( ( "Cert read failed" ) );
-        vPortFree( pvSigVerifyContext );
+        CRYPTO_SignatureVerificationCleanup( pvSigVerifyContext );
         return OtaPalBadSignerCert;
     }
     else
@@ -465,7 +295,7 @@ OtaPalStatus_t otaPal_CheckFileSignature( AfrOtaJobDocumentFields_t * const pFil
         {
             LogError( ( "Partition mmap failed %d", ret ) );
             result = OtaPalSignatureCheckFailed;
-            vPortFree( pvSigVerifyContext );
+            CRYPTO_SignatureVerificationCleanup( pvSigVerifyContext );
             goto end;
         }
 
